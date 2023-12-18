@@ -19,11 +19,12 @@ impl Resource for NetworkReceiver {}
 
 fn main() {
     let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let socket = UdpSocket::bind("0.0.0.0:0").expect("Failed to bind socket");
+    socket
+        .connect("127.0.0.1:12345")
+        .expect("Failed to connect to server");
+    let socket_clone = socket.try_clone().expect("Failed to clone socket");
     thread::spawn(move || {
-        let socket = UdpSocket::bind("0.0.0.0:0").expect("Failed to bind socket");
-        socket
-            .connect("127.0.0.1:12345")
-            .expect("Failed to connect to server");
 
         for message in rx.iter() {
             socket
@@ -32,16 +33,14 @@ fn main() {
         }
     });
 
-    let (update_tx, update_rx) = std::sync::mpsc::channel::<String>();
     thread::spawn(move || {
-        let socket = UdpSocket::bind("0.0.0.0:12346").expect("Failed to bind receive socket");
-        let mut buf = [0; 1024];
-
         loop {
-            let (amt, _) = socket.recv_from(&mut buf).expect("Failed to receive message");
+            let mut buf = [0; 1024];
+            let (amt, _) = socket_clone.recv_from(&mut buf).expect("Failed to receive message");
             let msg = String::from_utf8_lossy(&buf[..amt]);
-            update_tx.send(msg.to_string()).expect("Failed to send update");
+            println!("Received: {}", msg);
         }
+
     });
 
     App::new()
@@ -86,12 +85,6 @@ fn setup(
     // light
     commands.spawn(PointLightBundle {
         transform: Transform::from_xyz(4.0, 8.0, 4.0),
-        ..Default::default()
-    });
-
-    // Camera setup
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
         ..Default::default()
     });
 
