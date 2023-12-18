@@ -1,10 +1,24 @@
+use bevy::math::cubic_splines;
 use bevy::prelude::*;
 use bevy_flycam::prelude::*;
 use std::net::UdpSocket;
 use std::sync::mpsc::Sender;
 use std::sync::{mpsc::Receiver, Arc, Mutex};
 use std::thread;
+use lazy_static::lazy_static;
 
+lazy_static! {
+    // x,y z global variable for cude position
+    static ref CUBE_POSITION: Arc<Mutex<(f32, f32, f32, bool)>> = Arc::new(Mutex::new((0.0, 0.0, 0.0, false)));
+}
+
+use std::f32::consts::PI;
+#[derive(Component)]
+struct CubeState {
+    start_pos: Vec3,
+    move_speed: f32,
+    turn_speed: f32,
+}
 struct NetworkSender {
     pub sender: Sender<String>,
 }
@@ -39,6 +53,25 @@ fn main() {
             let (amt, _) = socket_clone.recv_from(&mut buf).expect("Failed to receive message");
             let msg = String::from_utf8_lossy(&buf[..amt]);
             println!("Received: {}", msg);
+
+            // Split the message by commas 
+            let coords: Vec<&str> = msg.split(',').collect();
+
+            // Update the global cube position x nad y
+            if coords.len() == 3 {
+                if let (Ok(x), Ok(y), Ok(z)) = (
+                    coords[0].parse::<f32>(),
+                    coords[1].parse::<f32>(),
+                    coords[2].parse::<f32>(),
+                )
+                 {
+                    let mut cube_position = CUBE_POSITION.lock().unwrap();
+                    if cube_position.0 != x {
+                        *cube_position = (x, y, z, true);
+                        println!("Updated cube position to {:?}", cube_position);
+                    }
+                }                
+            }
         }
 
     });
@@ -54,7 +87,10 @@ fn main() {
         .insert_resource(NetworkSender { sender: tx })
         .add_systems(Startup, setup)
         .add_systems(Update, send_camera_position_system)
-        .add_systems(Update, process_updates_system)
+        .add_systems(Update, (
+            process_updates_system, 
+            move_players,
+        ).chain())
         .run();
 }
 
@@ -75,12 +111,28 @@ fn setup(
     },));
 
     // cube
+    /*
     commands.spawn(PbrBundle {
         mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
         material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
         transform: Transform::from_xyz(0.0, 0.5, 0.0),
         ..Default::default()
     });
+    */
+    let cube_spawn = Transform::from_xyz(0.0, 0.5, 0.0);
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
+            material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
+            transform: cube_spawn,
+            ..default()
+        },
+        CubeState {
+            start_pos: cube_spawn.translation,
+            move_speed: 2.0,
+            turn_speed: 0.2,
+        },
+    ));
 
     // light
     commands.spawn(PointLightBundle {
@@ -107,10 +159,27 @@ fn send_camera_position_system(
     }
 }
 
+fn move_players( 
+    mut cubes: Query<(&mut Transform, &mut CubeState)>, timer: Res<Time>
+) {
+    let mut cube_position = CUBE_POSITION.lock().unwrap();
+
+    if cube_position.3 {
+        for (mut transform, cube) in &mut cubes {
+            println!("Transform includes {:?}", transform);
+            // Move the cube forward smoothly at a given move_speed.
+            let forward = transform.forward();
+            //transform.translation += forward * cube.move_speed * timer.delta_seconds();
+            transform.translation = Vec3::new(cube_position.0, cube_position.1, cube_position.2+10.0);
+            cube_position.3 = false;
+        }
+    }
+}
+
 fn process_updates_system(
     net_receiver: Option<Res<NetworkReceiver>>,
-    mut query: Query<&mut Transform, With<Camera>>,
-) {
+    mut query: Query<&mut Transform>, // , With<Camera>
+) {    
     if let Some(receiver) = net_receiver {
         if let Ok(rx) = receiver.receiver.lock() {
             if let Ok(update) = rx.try_recv() {
