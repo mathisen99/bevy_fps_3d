@@ -1,11 +1,17 @@
+mod config;
 use bevy::math::cubic_splines;
 use bevy::prelude::*;
+use bevy_client_server_events::{
+    client::{ConnectToServer, ReceiveFromServer, SendToServer},
+    client_server_events_plugin, NetworkConfig,
+};
 use bevy_flycam::prelude::*;
+use config::*;
+use lazy_static::lazy_static;
 use std::net::UdpSocket;
 use std::sync::mpsc::Sender;
 use std::sync::{mpsc::Receiver, Arc, Mutex};
 use std::thread;
-use lazy_static::lazy_static;
 
 lazy_static! {
     // x,y z global variable for cude position
@@ -32,7 +38,7 @@ struct NetworkReceiver {
 impl Resource for NetworkReceiver {}
 
 fn main() {
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    /*let (tx, rx) = std::sync::mpsc::channel::<String>();
     let socket = UdpSocket::bind("0.0.0.0:0").expect("Failed to bind socket");
     socket
         .connect("127.0.0.1:12345")
@@ -54,7 +60,7 @@ fn main() {
             let msg = String::from_utf8_lossy(&buf[..amt]);
             println!("Received: {}", msg);
 
-            // Split the message by commas 
+            // Split the message by commas
             let coords: Vec<&str> = msg.split(',').collect();
 
             // Update the global cube position x nad y
@@ -70,27 +76,30 @@ fn main() {
                         *cube_position = (x, y, z, true);
                         println!("Updated cube position to {:?}", cube_position);
                     }
-                }                
+                }
             }
         }
 
-    });
+    });*/
 
-    App::new()
-        .insert_resource(Msaa::Sample4)
+    let mut app = App::new();
+    client_server_events_plugin!(
+        app,
+        MessageToServer => NetworkConfig::default(),
+        MessageToClient => NetworkConfig::default()
+    );
+
+    app.insert_resource(Msaa::Sample4)
         .add_plugins(DefaultPlugins)
         .add_plugins(PlayerPlugin)
         .insert_resource(MovementSettings {
             sensitivity: 0.00015, // default: 0.00012
             speed: 12.0,          // default: 12.0
         })
-        .insert_resource(NetworkSender { sender: tx })
+        //.insert_resource(NetworkSender { sender: tx })
         .add_systems(Startup, setup)
         .add_systems(Update, send_camera_position_system)
-        .add_systems(Update, (
-            process_updates_system, 
-            move_players,
-        ).chain())
+        .add_systems(Update, (process_updates_system, move_players).chain())
         .run();
 }
 
@@ -99,7 +108,12 @@ fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut connect_to_server: EventWriter<ConnectToServer>,
 ) {
+    connect_to_server.send(ConnectToServer {
+        server_port: SERVER_PORT,
+        ..default()
+    });
     // plane
     commands.spawn((PbrBundle {
         mesh: meshes.add(Mesh::from(shape::Plane {
@@ -159,9 +173,7 @@ fn send_camera_position_system(
     }
 }
 
-fn move_players( 
-    mut cubes: Query<(&mut Transform, &mut CubeState)>, timer: Res<Time>
-) {
+fn move_players(mut cubes: Query<(&mut Transform, &mut CubeState)>, timer: Res<Time>) {
     let mut cube_position = CUBE_POSITION.lock().unwrap();
 
     if cube_position.3 {
@@ -170,7 +182,8 @@ fn move_players(
             // Move the cube forward smoothly at a given move_speed.
             let forward = transform.forward();
             //transform.translation += forward * cube.move_speed * timer.delta_seconds();
-            transform.translation = Vec3::new(cube_position.0, cube_position.1, cube_position.2+10.0);
+            transform.translation =
+                Vec3::new(cube_position.0, cube_position.1, cube_position.2 + 10.0);
             cube_position.3 = false;
         }
     }
@@ -179,7 +192,7 @@ fn move_players(
 fn process_updates_system(
     net_receiver: Option<Res<NetworkReceiver>>,
     mut query: Query<&mut Transform>, // , With<Camera>
-) {    
+) {
     if let Some(receiver) = net_receiver {
         if let Ok(rx) = receiver.receiver.lock() {
             if let Ok(update) = rx.try_recv() {
@@ -190,14 +203,12 @@ fn process_updates_system(
                         coords[0].parse::<f32>(),
                         coords[1].parse::<f32>(),
                         coords[2].parse::<f32>(),
-                    )
-                     {
+                    ) {
                         for mut transform in query.iter_mut() {
                             transform.translation = Vec3::new(x, y, z);
                             println!("Updated camera position to {:?}", transform.translation);
                         }
                     }
-                    
                 }
             }
         }
